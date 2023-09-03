@@ -1,0 +1,85 @@
+#include "imports/stdlib.fc";
+#include "imports/common.fc";
+
+_ load_data() inline {
+  slice ds = get_data().begin_parse();
+
+  return (
+    ds~load_coins(),       ;; amount_per_request
+    ds~load_msg_addr(),    ;; admin
+    ds~load_msg_addr(),    ;; jetton_wallet
+    ds.preload_uint(32),   ;; max_faucet_requests
+    ds.preload_ref()       ;; faucet_item_code
+  );
+}
+
+_ save_data(int amount_per_request, slice admin, slice jetton_wallet, int max_faucet_requests, cell faucet_item_code) impure inline {
+  return set_data(
+    begin_cell()
+      .store_coins(amount_per_request)
+      .store_slice(admin)
+      .store_slice(jetton_wallet)
+      .store_uint(max_faucet_requests, 32)
+      .store_ref(faucet_item_code)
+      .end_cell()
+  );
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+  throw_if(0, in_msg_body.slice_empty?()); ;; ignore empty messages
+
+  slice cs = in_msg_full.begin_parse();
+  int flags = cs~load_uint(4);
+
+  throw_if(0, flags & 1); ;; ignore all bounced messages
+
+  slice sender_address = cs~load_msg_addr();
+
+  int op = in_msg_body~load_uint(32);
+
+  var (amount_per_request, admin, jetton_wallet, max_faucet_requests, faucet_item_code) = load_data();
+
+  if (op == op::request_faucet_withdraw) {
+    slice user_addr = in_msg_body~load_msg_addr();
+    var (_, faucet_item_addr) = get_faucet_item_init_and_address(faucet_item_code, my_address(), user_addr);
+    slice faucet_item_addr = null();
+    throw_unless(401, equal_slices(sender_address, faucet_item_addr));
+
+    int req_count = in_msg_body~load_uint(32);
+    throw_if(400, req_count > max_faucet_requests);
+
+    send_withdraw(amount_per_request, user_addr, jetton_wallet, 0, 64);
+    return ();
+  }
+
+  throw_unless(401, equal_slices(sender_address, admin));
+
+  if (op == op::change_faucet_settings) {
+    var (new_amount_per_request, new_jetton_wallet, new_max_faucet_requests) = (in_msg_body~load_coins(), in_msg_body~load_msg_addr(), in_msg_body.preload_uint(32));
+
+    save_data(new_amount_per_request, admin, new_jetton_wallet, new_max_faucet_requests, faucet_item_code);
+    send_empty_message(0, sender_address, 64);
+    return ();
+  }
+
+  if (op == op::change_faucet_admin) {
+    slice new_admin = in_msg_body~load_msg_addr();
+
+    save_data(amount_per_request, new_admin, jetton_wallet, max_faucet_requests, faucet_item_code);
+    send_empty_message(0, sender_address, 64);
+    return ();
+  }
+
+  throw(0xffff);
+}
+
+;; GET-METHODS
+(int, slice, slice, int) get_faucet_master_data() method_id {
+  var (amount_per_request, admin, jetton_wallet, max_faucet_requests, faucet_item_code) = load_data();
+  return (amount_per_request, admin, jetton_wallet, max_faucet_requests);
+}
+
+(cell, slice) get_faucet_item_stateinit_and_address(slice user_addr) method_id {
+  var (_, _, _, _, faucet_item_code) = load_data();
+  return get_faucet_item_init_and_address(faucet_item_code, my_address(), user_addr);
+}

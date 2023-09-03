@@ -1,0 +1,65 @@
+;; OP-codes
+const op::change_faucet_settings = "op::change_faucet_settings"c;
+const op::change_faucet_admin = "op::change_faucet_admin"c;
+const op::request_faucet_withdraw = "op::request_faucet_withdraw"c;
+const int op::transfer = 0xf8a7ea5;
+
+;; Helpers
+cell pack_faucet_item_data(slice faucet_master_addr, slice user_addr, int requests_count) inline {
+  return begin_cell().store_slice(faucet_master_addr).store_slice(user_addr).store_uint(requests_count, 32).end_cell();
+}
+
+slice get_serialized_address(int workchain, int address_hash) inline {
+  return begin_cell()
+      .store_uint(4, 3)
+      .store_uint(workchain, 8)
+      .store_uint(address_hash, 256)
+      .end_cell()
+      .begin_parse();
+}
+
+(cell, slice) get_faucet_item_init_and_address(cell faucet_item_code, slice faucet_master_addr, slice user_addr) inline {
+  cell state_init = begin_cell()
+    .store_uint(0, 2)
+    .store_dict(faucet_item_code)
+    .store_dict(pack_faucet_item_data(faucet_master_addr, user_addr, 0))
+    .store_uint(0, 1)
+    .end_cell();
+      
+  return (state_init, get_serialized_address(0, cell_hash(state_init)));
+}
+
+() send_empty_message(int amount, slice to, int mode) impure inline {
+  cell msg = begin_cell()
+        .store_uint(0x18, 6)
+        .store_slice(to)
+        .store_coins(amount)
+        .store_uint(0, 107)
+    .end_cell();
+  send_raw_message(msg, mode);
+}
+
+() send_simple_message_ref(int amount, slice to, cell body, int mode) impure inline {
+  cell msg = begin_cell()
+    .store_uint(0x18, 6)
+    .store_slice(to)
+    .store_coins(amount)
+    .store_uint(1, 107)
+    .store_ref(body)
+    .end_cell();
+  send_raw_message(msg, mode);
+}
+
+() send_withdraw(int amount, slice to, slice jetton_wallet, int value, int mode) impure inline {
+  var body = begin_cell()
+    .store_uint(op::transfer, 32)
+    .store_uint(0, 64) ;; query_id
+    .store_coins(amount)
+    .store_slice(to) ;; destination
+    .store_slice(to) ;; response_destination
+    .store_uint(0, 1)
+    .store_coins(0)
+    .store_uint(0, 1);
+
+  send_simple_message_ref(value, jetton_wallet, body.end_cell(), mode);
+}

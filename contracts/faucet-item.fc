@@ -1,0 +1,74 @@
+#include "imports/stdlib.fc";
+#include "imports/common.fc";
+
+const min_request_value = 100000000; ;; 0.1 ton
+
+_ load_data() inline {
+  slice ds = get_data().begin_parse();
+
+  return (
+    ds~load_msg_addr(),    ;; master_addr
+    ds~load_msg_addr(),    ;; user_addr
+    ds.preload_uint(32)   ;; faucet_requests
+  );
+}
+
+_ save_data(slice master_addr, slice user_addr, int faucet_requests) impure inline {
+  return set_data(
+    begin_cell()
+      .store_slice(master_addr)
+      .store_slice(user_addr)
+      .store_uint(faucet_requests, 32)
+      .end_cell()
+  );
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+  throw_if(0, in_msg_body.slice_empty?()); ;; ignore empty messages
+
+  slice cs = in_msg_full.begin_parse();
+  int flags = cs~load_uint(4);
+
+  var (master_addr, user_addr, faucet_requests) = load_data();
+
+  if (flags & 1) {
+    in_msg_body~skip_bits(32);
+    int op = in_msg_body~load_uint(32);
+    if (op == op::request_faucet_withdraw) {
+      save_data(master_addr, user_addr, faucet_requests - 1);
+    }
+    return ();
+  }
+
+  int op == in_msg_body~load_uint(32);
+  ifnot (op) { ;; text op
+    if (in_msg_body == "Get faucet jettons") {
+      slice sender_address = cs~load_msg_addr();
+      throw_unless(401, equal_slices(sender_address, user_addr));
+      throw_if(402, msg_value < min_request_value);
+
+      cell msg = begin_cell()
+        .store_uint(0x18, 6)
+        .store_slice(master_addr)
+        .store_coins(0)
+        .store_uint(0, 107)
+        .store_uint(op::request_faucet_withdraw, 107)
+        .store_slice(user_addr)
+        .store_uint(faucet_requests, 32)
+        .end_cell();
+
+      send_raw_message(msg, 64);
+      save_data(master_addr, user_addr, faucet_requests + 1);
+      return ();
+    }
+      
+    throw(0xffff);
+  }
+
+  throw(0xffff);
+}
+
+(slice, slice, int) get_faucet_item_data() method_id {
+  var (master_addr, user_addr, faucet_requests) = load_data();
+  return (master_addr, user_addr, faucet_requests);
+}
